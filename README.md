@@ -1,5 +1,7 @@
 # SmartEVSE v3 app
 
+<img width="409" height="886" alt="image" src="https://github.com/user-attachments/assets/bf1d4737-ba30-4017-828f-b3cebde11ec9" />
+
 Uses Flutter, Android studio, should be portable to iOS
 
 ## Getting Started
