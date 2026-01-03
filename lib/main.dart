@@ -28,6 +28,7 @@ import 'dart:async';  // For TimeoutException and Timer
 import 'package:shared_preferences/shared_preferences.dart';  // Added for persistent storage
 import 'package:uuid/uuid.dart';  // Added for UUID generation
 import 'package:package_info_plus/package_info_plus.dart';  // Added for app version info
+import 'package:network_info_plus/network_info_plus.dart';  // Added for subnet scanning
 import 'mqtt_service.dart';  // Added for MQTT support
 import 'utils/logger.dart';  // Added for debug logging
 
@@ -124,7 +125,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   Future<void> _loadAppVersion() async {
     final packageInfo = await PackageInfo.fromPlatform();
     setState(() {
-      _appVersion = '${packageInfo.version}+${packageInfo.buildNumber}';
+      _appVersion = packageInfo.version;
     });
   }
 
@@ -727,7 +728,8 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
 
   Future<List<Map<String, dynamic>>> discoverHttpServices() async {
     final List<Map<String, dynamic>> discovered = [];
-    final Set<String> seenSerials = {};
+    final Set<String> seenIps = {};
+    final List<String> foundIps = [];
 
     try {
       final discovery = await startDiscovery('_http._tcp', ipLookupType: IpLookupType.any);
@@ -737,11 +739,13 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
           if (serviceName != null) {
             final lowerName = serviceName.toLowerCase();
             if (lowerName.startsWith('smartevse-')) {
-              final String serial = lowerName.split('-')[1].split('._')[0];
               final addresses = service.addresses;
-              if (!seenSerials.contains(serial) && discovered.length < maxDevices && addresses != null && addresses.isNotEmpty) {
-                seenSerials.add(serial);
-                discovered.add({'serial': serial, 'ip': addresses.first.address, 'port': service.port ?? 80});
+              if (addresses != null && addresses.isNotEmpty) {
+                final ip = addresses.first.address;
+                if (!seenIps.contains(ip) && foundIps.length < maxDevices) {
+                  seenIps.add(ip);
+                  foundIps.add(ip);
+                }
               }
             }
           }
@@ -757,11 +761,145 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       _showSnackBar('Discovery error: $e');
     }
 
+    // Fetch serial numbers from /settings for each discovered IP
+    final Set<String> seenSerials = {};
+    for (final ip in foundIps) {
+      final result = await _probeSmartEVSE(ip, const Duration(seconds: 3));
+      if (result != null) {
+        final serial = result['serial'] as String;
+        if (!seenSerials.contains(serial)) {
+          seenSerials.add(serial);
+          discovered.add(result);
+        }
+      }
+    }
+
     return discovered;
   }
 
+  /// Subnet scan fallback: Scans all IPs on the local subnet for SmartEVSE devices
+  /// by requesting /settings endpoint and validating the response structure.
+  Future<List<Map<String, dynamic>>> _scanSubnetForDevices({
+    Function(int scanned, int total)? onProgress,
+  }) async {
+    final List<Map<String, dynamic>> discovered = [];
+    final Set<String> seenSerials = {};
+
+    try {
+      // Get the device's WiFi IP address
+      final networkInfo = NetworkInfo();
+      final wifiIP = await networkInfo.getWifiIP();
+      
+      if (wifiIP == null || wifiIP.isEmpty) {
+        Logger.warning('App', 'Subnet scan: Could not get WiFi IP address');
+        return discovered;
+      }
+
+      Logger.debug('App', 'Subnet scan: Device IP is $wifiIP');
+
+      // Extract subnet (e.g., "192.168.1." from "192.168.1.100")
+      final lastDot = wifiIP.lastIndexOf('.');
+      if (lastDot == -1) {
+        Logger.warning('App', 'Subnet scan: Invalid IP format');
+        return discovered;
+      }
+      final subnet = wifiIP.substring(0, lastDot + 1);
+      Logger.debug('App', 'Subnet scan: Scanning subnet $subnet*');
+
+      // Scan all 254 addresses in parallel batches
+      const batchSize = 50;  // Number of concurrent requests
+      const timeout = Duration(seconds: 2);
+      int scanned = 0;
+
+      for (int batchStart = 1; batchStart <= 254; batchStart += batchSize) {
+        final futures = <Future<void>>[];
+        final batchEnd = (batchStart + batchSize - 1).clamp(1, 254);
+
+        for (int i = batchStart; i <= batchEnd; i++) {
+          final ip = '$subnet$i';
+          futures.add(_probeSmartEVSE(ip, timeout).then((result) {
+            if (result != null) {
+              final serial = result['serial'] as String;
+              if (!seenSerials.contains(serial) && discovered.length < maxDevices) {
+                seenSerials.add(serial);
+                discovered.add(result);
+                Logger.debug('App', 'Subnet scan: Found SmartEVSE-$serial at $ip');
+              }
+            }
+          }));
+        }
+
+        await Future.wait(futures);
+        scanned = batchEnd;
+        onProgress?.call(scanned, 254);
+      }
+
+      Logger.debug('App', 'Subnet scan: Complete. Found ${discovered.length} device(s)');
+    } catch (e) {
+      Logger.error('App', 'Subnet scan error: $e');
+    }
+
+    return discovered;
+  }
+
+  /// Probe a single IP address to check if it's a SmartEVSE device
+  Future<Map<String, dynamic>?> _probeSmartEVSE(String ip, Duration timeout) async {
+    try {
+      final url = Uri.parse('http://$ip/settings');
+      final response = await http.get(url).timeout(timeout);
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        
+        // Validate it's a SmartEVSE by checking expected fields
+        if (data is Map && 
+            data.containsKey('evse') && 
+            data.containsKey('settings') &&
+            data['evse'] is Map) {
+          
+          // Extract serial from the serialnr field (required for MQTT pairing)
+          if (data.containsKey('serialnr') && data['serialnr'] != null) {
+            final serial = data['serialnr'].toString();
+            if (serial.isNotEmpty) {
+              return {
+                'serial': serial,
+                'ip': ip,
+                'port': 80,
+              };
+            }
+          }
+          
+          // No valid serial found - skip this device
+          Logger.warning('App', 'Device at $ip has no serialnr field');
+          return null;
+        }
+      }
+    } on TimeoutException {
+      // Timeout is expected for most IPs - ignore silently
+    } catch (e) {
+      // Other errors (connection refused, etc.) - ignore silently
+    }
+    return null;
+  }
+
   Future<void> _editDeviceName(String serial) async {
-    final device = _storedDevices.firstWhere((d) => d['serial'] == serial);
+    // Find device - try exact match first, then case-insensitive
+    Map<String, String>? device;
+    try {
+      device = _storedDevices.firstWhere((d) => d['serial'] == serial);
+    } catch (e) {
+      // Try case-insensitive match
+      try {
+        device = _storedDevices.firstWhere(
+          (d) => d['serial']?.toLowerCase() == serial.toLowerCase()
+        );
+      } catch (e) {
+        Logger.error('App', 'Device with serial $serial not found in stored devices');
+        _showSnackBar('Device not found');
+        return;
+      }
+    }
+
     final currentName = device['customName'] ?? '';
     final controller = TextEditingController(text: currentName);
 
@@ -788,12 +926,12 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
 
     if (newName != null && newName.isNotEmpty) {
       setState(() {
-        device['customName'] = newName;
+        device!['customName'] = newName;
       });
       _saveStoredDevices();
     } else if (newName != null && newName.isEmpty) {
       setState(() {
-        device.remove('customName');
+        device!.remove('customName');
       });
       _saveStoredDevices();
     }
@@ -902,133 +1040,42 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   }
 
   Future<void> _manageDevices() async {
-    setState(() => isLoading = true);
-    final onlineDevices = await discoverHttpServices();
-    setState(() => isLoading = false);
-
     if (!mounted) return;
 
+    // Show dialog immediately with scanning state
     showDialog(
       context: context,
+      barrierDismissible: false,  // Prevent closing during scan
       builder: (context) {
-        Map<String, Map<String, dynamic>> combinedDevices = {};
-
-        // Add stored devices (offline or online)
-        for (final stored in _storedDevices) {
-          combinedDevices[stored['serial']!] = {'serial': stored['serial']!, 'ip': stored['ip']!, 'isOnline': false};
-        }
-
-        // Add or update with online devices
-        for (final online in onlineDevices) {
-          final serial = online['serial'] as String;
-          combinedDevices[serial] = {'serial': serial, 'ip': online['ip'] as String, 'isOnline': true};
-        }
-
-        List<Map<String, dynamic>> deviceList = combinedDevices.values.toList()..sort((a, b) => int.parse(a['serial'] as String) - int.parse(b['serial'] as String));
-
-        return StatefulBuilder(
-          builder: (context, dialogSetState) {
-            return Dialog(
-              insetPadding: const EdgeInsets.symmetric(horizontal: 16),  // Reduce side padding for wider dialog
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.9,  // Set to 90% of screen width
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('Manage Devices', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 16),
-                    Flexible(
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: deviceList.length,
-                        itemBuilder: (context, index) {
-                          final device = deviceList[index];
-                          final serial = device['serial'] as String;
-                          final ip = device['ip'] as String;
-                          final isStored = _storedDevices.any((d) => d['serial'] == serial);
-                          final storedDevice = isStored ? _storedDevices.firstWhere((d) => d['serial'] == serial) : null;
-                          final displayName = storedDevice != null ? _getDeviceDisplayName(storedDevice) : 'SmartEVSE-$serial';
-                          return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 0),  // Remove horizontal padding for left alignment
-                            leading: isStored
-                                ? IconButton(
-                              icon: const Icon(Icons.edit, size: 20),
-                              onPressed: () {
-                                _editDeviceName(serial).then((_) => dialogSetState(() {}));
-                              },
-                            )
-                                : null,
-                            title: Text('$displayName ($ip)${device['isOnline'] ? '' : ' (offline)'}'),
-                            trailing: SizedBox(
-                              width: 48,  // Wider trailing area to push button right
-                              child: Align(
-                                alignment: Alignment.centerRight,
-                                child: IconButton(
-                                  icon: Icon(isStored ? Icons.remove_circle : Icons.add_circle, color: isStored ? Colors.red : Colors.green),
-                                  onPressed: () {
-                                    if (isStored) {
-                                      setState(() {
-                                        _storedDevices.removeWhere((d) => d['serial'] == serial);
-                                        if (_selectedSerial == serial) {
-                                          _selectedSerial = _storedDevices.isNotEmpty ? _storedDevices.first['serial'] : null;
-                                          _selectedIp = _storedDevices.isNotEmpty ? _storedDevices.first['ip']! : '';
-                                        }
-                                      });
-                                      _saveStoredDevices();
-                                      _setActiveEVSE(_selectedSerial, _selectedIp);
-                                    } else {
-                                      if (_storedDevices.length < maxDevices) {
-                                        setState(() {
-                                          _storedDevices.add({'serial': serial, 'ip': ip});
-                                          if (_selectedSerial == null) {
-                                            _selectedSerial = serial;
-                                            _selectedIp = ip;
-                                          }
-                                        });
-                                        _saveStoredDevices();
-                                        if (_selectedSerial == serial) {
-                                          _setActiveEVSE(serial, ip);
-                                        }
-                                      } else {
-                                        _showSnackBar('Max $maxDevices devices reached');
-                                      }
-                                    }
-                                    // Refresh dialog list
-                                    combinedDevices = {};
-                                    for (final stored in _storedDevices) {
-                                      combinedDevices[stored['serial']!] = {'serial': stored['serial']!, 'ip': stored['ip']!, 'isOnline': onlineDevices.any((o) => o['serial'] == stored['serial'])};
-                                    }
-                                    for (final online in onlineDevices) {
-                                      final serialOnline = online['serial'] as String;
-                                      if (!combinedDevices.containsKey(serialOnline)) {
-                                        combinedDevices[serialOnline] = {'serial': serialOnline, 'ip': online['ip'] as String, 'isOnline': true};
-                                      }
-                                    }
-                                    deviceList = combinedDevices.values.toList()..sort((a, b) => int.parse(a['serial'] as String) - int.parse(b['serial'] as String));
-                                    dialogSetState(() {});
-                                  },
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
-                    ),
-                  ],
-                ),
-              ),
-            );
+        return _ManageDevicesDialog(
+          storedDevices: _storedDevices,
+          maxDevices: maxDevices,
+          getDeviceDisplayName: _getDeviceDisplayName,
+          onEditDeviceName: _editDeviceName,
+          onDevicesChanged: (devices) {
+            setState(() {
+              _storedDevices = devices;
+            });
+            _saveStoredDevices();
           },
+          onDeviceSelected: (serial, ip) {
+            if (_selectedSerial == serial) return;
+            setState(() {
+              _selectedSerial = serial;
+              _selectedIp = ip;
+            });
+            _setActiveEVSE(serial, ip);
+          },
+          selectedSerial: _selectedSerial,
+          discoverMdns: discoverHttpServices,
+          discoverSubnet: _scanSubnetForDevices,
+          showSnackBar: _showSnackBar,
         );
       },
     );
   }
+
+  // Legacy method kept for reference - now using _ManageDevicesDialog
 
   void _showSnackBar(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -1085,7 +1132,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
           ),
         )
             : null,
-        title: _storedDevices.isNotEmpty && _selectedSerial != null
+        title: _storedDevices.isNotEmpty && _selectedSerial != null && _storedDevices.any((d) => d['serial'] == _selectedSerial)
             ? DropdownButton<String>(
           value: _selectedSerial,
           underline: const SizedBox(),  // Remove the underline
@@ -1347,6 +1394,348 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Stateful dialog for managing devices with hybrid discovery (mDNS + subnet scan)
+class _ManageDevicesDialog extends StatefulWidget {
+  final List<Map<String, String>> storedDevices;
+  final int maxDevices;
+  final String Function(Map<String, String>) getDeviceDisplayName;
+  final Future<void> Function(String) onEditDeviceName;
+  final void Function(List<Map<String, String>>) onDevicesChanged;
+  final void Function(String?, String) onDeviceSelected;
+  final String? selectedSerial;
+  final Future<List<Map<String, dynamic>>> Function() discoverMdns;
+  final Future<List<Map<String, dynamic>>> Function({Function(int, int)? onProgress}) discoverSubnet;
+  final void Function(String) showSnackBar;
+
+  const _ManageDevicesDialog({
+    required this.storedDevices,
+    required this.maxDevices,
+    required this.getDeviceDisplayName,
+    required this.onEditDeviceName,
+    required this.onDevicesChanged,
+    required this.onDeviceSelected,
+    required this.selectedSerial,
+    required this.discoverMdns,
+    required this.discoverSubnet,
+    required this.showSnackBar,
+  });
+
+  @override
+  State<_ManageDevicesDialog> createState() => _ManageDevicesDialogState();
+}
+
+class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
+  List<Map<String, String>> _localStoredDevices = [];
+  List<Map<String, dynamic>> _onlineDevices = [];
+  bool _isScanning = false;
+  String _scanStatus = '';
+  int _scanProgress = 0;
+  int _scanTotal = 0;
+  bool _mdnsComplete = false;
+  bool _subnetComplete = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _localStoredDevices = List.from(widget.storedDevices);
+    _startDiscovery();
+  }
+
+  Future<void> _startDiscovery() async {
+    setState(() {
+      _isScanning = true;
+      _scanStatus = 'Scanning network (mDNS)...';
+      _mdnsComplete = false;
+      _subnetComplete = false;
+      _onlineDevices = [];
+    });
+
+    // Phase 1: mDNS discovery (fast)
+    try {
+      final mdnsDevices = await widget.discoverMdns();
+      if (mounted) {
+        setState(() {
+          _onlineDevices = mdnsDevices;
+          _mdnsComplete = true;
+        });
+      }
+      Logger.debug('App', 'mDNS discovery found ${mdnsDevices.length} device(s)');
+    } catch (e) {
+      Logger.error('App', 'mDNS discovery error: $e');
+    }
+
+    // Phase 2: Subnet scan fallback (if mDNS found nothing or as supplement)
+    if (mounted && _onlineDevices.isEmpty) {
+      setState(() {
+        _scanStatus = 'No devices found via mDNS. Scanning subnet...';
+        _scanProgress = 0;
+        _scanTotal = 254;
+      });
+
+      try {
+        final subnetDevices = await widget.discoverSubnet(
+          onProgress: (scanned, total) {
+            if (mounted) {
+              setState(() {
+                _scanProgress = scanned;
+                _scanTotal = total;
+                _scanStatus = 'Scanning subnet... ($scanned/$total)';
+              });
+            }
+          },
+        );
+
+        if (mounted) {
+          setState(() {
+            _onlineDevices = subnetDevices;
+            _subnetComplete = true;
+          });
+        }
+        Logger.debug('App', 'Subnet scan found ${subnetDevices.length} device(s)');
+      } catch (e) {
+        Logger.error('App', 'Subnet scan error: $e');
+      }
+    } else {
+      setState(() {
+        _subnetComplete = true;  // Skip subnet if mDNS found devices
+      });
+    }
+
+    if (mounted) {
+      setState(() {
+        _isScanning = false;
+        _scanStatus = _onlineDevices.isEmpty 
+            ? 'No devices found' 
+            : 'Found ${_onlineDevices.length} device(s)';
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> _getCombinedDeviceList() {
+    Map<String, Map<String, dynamic>> combinedDevices = {};
+
+    // Add stored devices (offline or online)
+    for (final stored in _localStoredDevices) {
+      combinedDevices[stored['serial']!] = {
+        'serial': stored['serial']!,
+        'ip': stored['ip']!,
+        'isOnline': false,
+      };
+    }
+
+    // Add or update with online devices
+    for (final online in _onlineDevices) {
+      final serial = online['serial'] as String;
+      combinedDevices[serial] = {
+        'serial': serial,
+        'ip': online['ip'] as String,
+        'isOnline': true,
+      };
+    }
+
+    // Sort by serial number
+    final deviceList = combinedDevices.values.toList();
+    deviceList.sort((a, b) {
+      // Try numeric comparison first
+      final aSerial = int.tryParse(a['serial'] as String);
+      final bSerial = int.tryParse(b['serial'] as String);
+      if (aSerial != null && bSerial != null) {
+        return aSerial - bSerial;
+      }
+      // Fall back to string comparison
+      return (a['serial'] as String).compareTo(b['serial'] as String);
+    });
+
+    return deviceList;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final deviceList = _getCombinedDeviceList();
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.9,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Manage Devices',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            
+            // Scan status and progress
+            if (_isScanning) ...[
+              Text(
+                _scanStatus,
+                style: const TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              if (_scanTotal > 0 && !_mdnsComplete || (_mdnsComplete && _onlineDevices.isEmpty))
+                LinearProgressIndicator(
+                  value: _scanTotal > 0 ? _scanProgress / _scanTotal : null,
+                  backgroundColor: Colors.grey[800],
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                ),
+              if (_scanTotal == 0 || (_mdnsComplete && _onlineDevices.isNotEmpty))
+                const LinearProgressIndicator(
+                  backgroundColor: Colors.grey,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                ),
+              const SizedBox(height: 8),
+            ] else ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _scanStatus,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: _onlineDevices.isEmpty ? Colors.orange : Colors.green,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    onPressed: _startDiscovery,
+                    tooltip: 'Scan again',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+            
+            // Device list
+            Flexible(
+              child: deviceList.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Text(
+                          _isScanning
+                              ? 'Searching for devices...'
+                              : 'No devices found.\nMake sure your SmartEVSE is connected to WiFi.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: deviceList.length,
+                      itemBuilder: (context, index) {
+                        final device = deviceList[index];
+                        final serial = device['serial'] as String;
+                        final ip = device['ip'] as String;
+                        final isOnline = device['isOnline'] as bool;
+                        final storedDevice = _localStoredDevices.cast<Map<String, String>?>().firstWhere(
+                          (d) => d?['serial'] == serial,
+                          orElse: () => null,
+                        );
+                        final isStored = storedDevice != null;
+                        final displayName = storedDevice != null
+                            ? widget.getDeviceDisplayName(storedDevice)
+                            : 'SmartEVSE-$serial';
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 0),
+                          leading: isStored
+                              ? IconButton(
+                                  icon: const Icon(Icons.edit, size: 20),
+                                  onPressed: () async {
+                                    // Use stored device's serial to ensure match
+                                    final storedSerial = storedDevice!['serial']!;
+                                    await widget.onEditDeviceName(storedSerial);
+                                    if (mounted) {
+                                      setState(() {
+                                        // Force deep copy to ensure UI updates with new names
+                                        _localStoredDevices = widget.storedDevices
+                                            .map((d) => Map<String, String>.from(d))
+                                            .toList();
+                                      });
+                                    }
+                                  },
+                                )
+                              : const SizedBox(width: 48),
+                          title: Text(
+                            '$displayName ($ip)${isOnline ? '' : ' (offline)'}',
+                            style: TextStyle(
+                              color: isOnline ? null : Colors.grey,
+                            ),
+                          ),
+                          trailing: SizedBox(
+                            width: 48,
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: IconButton(
+                                icon: Icon(
+                                  isStored ? Icons.remove_circle : Icons.add_circle,
+                                  color: isStored ? Colors.red : Colors.green,
+                                ),
+                                onPressed: () {
+                                  if (isStored) {
+                                    // Remove device
+                                    setState(() {
+                                      _localStoredDevices.removeWhere((d) => d['serial'] == serial);
+                                    });
+                                    
+                                    // Update selected device BEFORE onDevicesChanged to avoid dropdown error
+                                    if (widget.selectedSerial == serial) {
+                                      if (_localStoredDevices.isNotEmpty) {
+                                        widget.onDeviceSelected(
+                                          _localStoredDevices.first['serial'],
+                                          _localStoredDevices.first['ip']!,
+                                        );
+                                      } else {
+                                        widget.onDeviceSelected(null, '');
+                                      }
+                                    }
+                                    widget.onDevicesChanged(_localStoredDevices);
+                                  } else {
+                                    // Add device
+                                    if (_localStoredDevices.length < widget.maxDevices) {
+                                      setState(() {
+                                        _localStoredDevices.add({'serial': serial, 'ip': ip});
+                                      });
+                                      widget.onDevicesChanged(_localStoredDevices);
+                                      
+                                      // Select this device if none selected
+                                      if (widget.selectedSerial == null) {
+                                        widget.onDeviceSelected(serial, ip);
+                                      }
+                                    } else {
+                                      widget.showSnackBar('Max ${widget.maxDevices} devices reached');
+                                    }
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _isScanning ? null : () => Navigator.pop(context),
+                child: Text(_isScanning ? 'Scanning...' : 'Close'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
