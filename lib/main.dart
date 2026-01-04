@@ -96,7 +96,6 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   final MqttService _mqttService = MqttService();
   bool _mqttConnected = false;
   bool _usingMqtt = false;  // True when currently using MQTT fallback
-  final Map<String, dynamic> _mqttData = {};  // Accumulated MQTT data
   Timer? _mqttDataTimer;  // Timer for MQTT data timeout
   static const int _mqttDataTimeoutSeconds = 30;  // Timeout duration
   String? _connectionError;  // Error message to display
@@ -148,8 +147,6 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
           _connectionError = null;
         });
       }
-      // Accumulate MQTT data
-      _mqttData.addAll(data);
       // Update UI state from MQTT data (only if we're using MQTT)
       if (_usingMqtt) {
         _updateStateFromMqttData(data);
@@ -308,7 +305,6 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
     setState(() {
       _mqttConnected = false;
       _usingMqtt = false;
-      _mqttData.clear();
       // Reset meter flags when switching devices
       _evMeterEnabled = false;
       _mainsMeterEnabled = false;
@@ -323,11 +319,8 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
 
     if (serial != null) {
       // Check if device is paired (has token) - if so, connect MQTT first
-      final device = _storedDevices.firstWhere(
-        (d) => d['serial'] == serial,
-        orElse: () => {},
-      );
-      final hasMqttToken = device['token']?.isNotEmpty ?? false;
+      final device = _findDeviceBySerial(serial);
+      final hasMqttToken = device?['token']?.isNotEmpty ?? false;
       
       if (hasMqttToken) {
         // Connect to MQTT first for paired devices
@@ -363,12 +356,8 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       return;
     }
 
-    final device = _storedDevices.firstWhere(
-      (d) => d['serial'] == serial,
-      orElse: () => {},
-    );
-
-    final token = device['token'];
+    final device = _findDeviceBySerial(serial);
+    final token = device?['token'];
     if (token == null || token.isEmpty) {
       Logger.debug('App', 'connectMqttIfPaired: No token for serial $serial, skipping');
       return;
@@ -400,8 +389,8 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       });
     }
     final activeSerial = prefs.getString('active_serial');
-    if (activeSerial != null && _storedDevices.any((d) => d['serial'] == activeSerial)) {
-      final activeDevice = _storedDevices.firstWhere((device) => device['serial'] == activeSerial);
+    final activeDevice = _findDeviceBySerial(activeSerial);
+    if (activeDevice != null) {
       setState(() {
         _selectedSerial = activeSerial;
         _selectedIp = activeDevice['ip'] ?? '';
@@ -412,7 +401,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       if (hasMqttToken) {
         Logger.debug('App', 'loadStoredDevices: Device is paired, connecting MQTT first');
         // Connect to MQTT first and wait for it
-        await _connectMqttIfPaired(activeSerial);
+        await _connectMqttIfPaired(activeSerial!);
         // If MQTT connected, set usingMqtt to true and skip initial HTTP
         if (_mqttConnected) {
           Logger.debug('App', 'loadStoredDevices: MQTT connected, using MQTT mode');
@@ -883,21 +872,11 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   }
 
   Future<void> _editDeviceName(String serial) async {
-    // Find device - try exact match first, then case-insensitive
-    Map<String, String>? device;
-    try {
-      device = _storedDevices.firstWhere((d) => d['serial'] == serial);
-    } catch (e) {
-      // Try case-insensitive match
-      try {
-        device = _storedDevices.firstWhere(
-          (d) => d['serial']?.toLowerCase() == serial.toLowerCase()
-        );
-      } catch (e) {
-        Logger.error('App', 'Device with serial $serial not found in stored devices');
-        _showSnackBar('Device not found');
-        return;
-      }
+    final device = _findDeviceBySerial(serial);
+    if (device == null) {
+      Logger.error('App', 'Device with serial $serial not found in stored devices');
+      _showSnackBar('Device not found');
+      return;
     }
 
     final currentName = device['customName'] ?? '';
@@ -926,12 +905,12 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
 
     if (newName != null && newName.isNotEmpty) {
       setState(() {
-        device!['customName'] = newName;
+        device['customName'] = newName;
       });
       _saveStoredDevices();
     } else if (newName != null && newName.isEmpty) {
       setState(() {
-        device!.remove('customName');
+        device.remove('customName');
       });
       _saveStoredDevices();
     }
@@ -941,11 +920,21 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
     return device['customName'] ?? 'SmartEVSE-${device['serial']}';
   }
 
-  // New: Check if the selected device has a MQTT token (connected)
+  /// Helper method to find a device by serial number
+  /// Returns null if not found (safer than returning empty map)
+  Map<String, String>? _findDeviceBySerial(String? serial) {
+    if (serial == null) return null;
+    try {
+      return _storedDevices.firstWhere((d) => d['serial'] == serial);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Check if the selected device has a MQTT token (paired)
   bool _isMqttConnected() {
-    if (_selectedSerial == null) return false;
-    final device = _storedDevices.firstWhere((d) => d['serial'] == _selectedSerial, orElse: () => {});
-    return device.containsKey('token') && device['token']!.isNotEmpty;
+    final device = _findDeviceBySerial(_selectedSerial);
+    return device != null && device['token']?.isNotEmpty == true;
   }
 
   // New: Prompt for Pairing PIN and perform pairing
@@ -1147,9 +1136,9 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
             );
           }).toList(),
           onChanged: (value) {
-            if (value != null) {
-              final selectedDevice = _storedDevices.firstWhere((d) => d['serial'] == value);
-              _setActiveEVSE(value, selectedDevice['ip']!);
+            final selectedDevice = _findDeviceBySerial(value);
+            if (selectedDevice != null) {
+              _setActiveEVSE(value!, selectedDevice['ip']!);
             }
           },
         )
@@ -1379,7 +1368,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'App: $_appVersion  |  SmartEVSE: $_smartEVSEVersion',
+                    'App: v$_appVersion  |  SmartEVSE: $_smartEVSEVersion',
                     style: const TextStyle(fontSize: 11, color: Colors.grey),
                     textAlign: TextAlign.center,
                   ),
@@ -1437,7 +1426,6 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
   int _scanProgress = 0;
   int _scanTotal = 0;
   bool _mdnsComplete = false;
-  bool _subnetComplete = false;
 
   @override
   void initState() {
@@ -1451,7 +1439,6 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
       _isScanning = true;
       _scanStatus = 'Scanning network (mDNS)...';
       _mdnsComplete = false;
-      _subnetComplete = false;
       _onlineDevices = [];
     });
 
@@ -1493,26 +1480,53 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
         if (mounted) {
           setState(() {
             _onlineDevices = subnetDevices;
-            _subnetComplete = true;
           });
         }
         Logger.debug('App', 'Subnet scan found ${subnetDevices.length} device(s)');
       } catch (e) {
         Logger.error('App', 'Subnet scan error: $e');
       }
-    } else {
-      setState(() {
-        _subnetComplete = true;  // Skip subnet if mDNS found devices
-      });
     }
 
     if (mounted) {
+      // Update stored device IPs if they changed
+      _updateStoredDeviceIps();
+      
       setState(() {
         _isScanning = false;
         _scanStatus = _onlineDevices.isEmpty 
             ? 'No devices found' 
             : 'Found ${_onlineDevices.length} device(s)';
       });
+    }
+  }
+
+  /// Update IP addresses in stored devices when found online with different IP
+  void _updateStoredDeviceIps() {
+    bool updated = false;
+    
+    for (final online in _onlineDevices) {
+      final serial = online['serial'] as String;
+      final newIp = online['ip'] as String;
+      
+      // Find matching stored device
+      final storedIndex = _localStoredDevices.indexWhere((d) => d['serial'] == serial);
+      if (storedIndex != -1) {
+        final storedDevice = _localStoredDevices[storedIndex];
+        final oldIp = storedDevice['ip'];
+        
+        // Update IP if different
+        if (oldIp != newIp) {
+          Logger.debug('App', 'Device $serial IP changed: $oldIp -> $newIp');
+          storedDevice['ip'] = newIp;
+          updated = true;
+        }
+      }
+    }
+    
+    // Save changes if any IPs were updated
+    if (updated) {
+      widget.onDevicesChanged(_localStoredDevices);
     }
   }
 
@@ -1654,15 +1668,13 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                                   icon: const Icon(Icons.edit, size: 20),
                                   onPressed: () async {
                                     // Use stored device's serial to ensure match
-                                    final storedSerial = storedDevice!['serial']!;
+                                    final storedSerial = storedDevice['serial']!;
                                     await widget.onEditDeviceName(storedSerial);
                                     if (mounted) {
-                                      setState(() {
-                                        // Force deep copy to ensure UI updates with new names
-                                        _localStoredDevices = widget.storedDevices
-                                            .map((d) => Map<String, String>.from(d))
-                                            .toList();
-                                      });
+                                      // Sync local devices with parent by calling onDevicesChanged
+                                      // This ensures both sides have the same data
+                                      widget.onDevicesChanged(_localStoredDevices);
+                                      setState(() {});
                                     }
                                   },
                                 )
@@ -1682,8 +1694,37 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                                   isStored ? Icons.remove_circle : Icons.add_circle,
                                   color: isStored ? Colors.red : Colors.green,
                                 ),
-                                onPressed: () {
+                                onPressed: () async {
                                   if (isStored) {
+                                    // Check if device is paired (has token)
+                                    final isPaired = storedDevice['token']?.isNotEmpty ?? false;
+                                    
+                                    // Show confirmation dialog
+                                    final confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => AlertDialog(
+                                        title: const Text('Remove Device?'),
+                                        content: Text(
+                                          isPaired
+                                              ? 'This device is paired for remote access. Removing it will require re-pairing.\n\nAre you sure you want to remove "$displayName"?'
+                                              : 'Are you sure you want to remove "$displayName"?',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, false),
+                                            child: const Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, true),
+                                            style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                            child: const Text('Remove'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    
+                                    if (confirmed != true) return;
+                                    
                                     // Remove device
                                     setState(() {
                                       _localStoredDevices.removeWhere((d) => d['serial'] == serial);
@@ -1704,8 +1745,26 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                                   } else {
                                     // Add device
                                     if (_localStoredDevices.length < widget.maxDevices) {
+                                      // Check if we have existing data (token, customName) for this serial
+                                      final existingDevice = widget.storedDevices.cast<Map<String, String>?>().firstWhere(
+                                        (d) => d?['serial'] == serial,
+                                        orElse: () => null,
+                                      );
+                                      
                                       setState(() {
-                                        _localStoredDevices.add({'serial': serial, 'ip': ip});
+                                        final newDevice = {'serial': serial, 'ip': ip};
+                                        // Preserve token and customName if they exist for this serial
+                                        if (existingDevice != null) {
+                                          final token = existingDevice['token'];
+                                          final customName = existingDevice['customName'];
+                                          if (token != null && token.isNotEmpty) {
+                                            newDevice['token'] = token;
+                                          }
+                                          if (customName != null && customName.isNotEmpty) {
+                                            newDevice['customName'] = customName;
+                                          }
+                                        }
+                                        _localStoredDevices.add(newDevice);
                                       });
                                       widget.onDevicesChanged(_localStoredDevices);
                                       

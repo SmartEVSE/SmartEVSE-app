@@ -18,7 +18,8 @@ Open a terminal window, then run:
 - Use `flutter devices` to see connected devices.
 Then run `flutter run` to run debug version on your connnected phone.
 - Build apk for 64 bit android only: `flutter build apk --target-platform android-arm64` (this keeps the .apk relatively small)
-- Install on phone `flutter install`
+- Install on phone `flutter install`. Note that this command will deinstall, and re-install the app, erasing all stored data.
+- It might be better to use `adb install -r build/app/outputs/flutter-apk/app-release.apk`
 - Note that when re-installing the dev environment, the phone needs to paired again. Re-enable USB debugging on the phone.
 
 Might have missed some steps, let me know and i'll add them.
