@@ -61,6 +61,9 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   static const Color boxBackgroundColor = Colors.white12;  // Define const color for all boxes
   static const int maxDevices = 8;
 
+  // DEV MODE: Set to true to skip pairing and show main screen with mock data
+  static const bool _devMode = false;//true;
+
   String? _selectedSerial;  // Nullable
   String _selectedIp = '';
   String status = 'Unknown';
@@ -73,7 +76,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   Timer? _timer;
   bool _evMeterEnabled = false;
   bool _mainsMeterEnabled = false;
-  double _powerW = 0.0;
+  double _powerKW = 0.0;  // Power in kW (converted from W in API)
   double _chargedKWh = 0.0;
   double _l1A = 0.0;
   double _l2A = 0.0;
@@ -117,7 +120,52 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   Future<void> _initializeApp() async {
     await _loadAppVersion();  // Load app version info
     await _loadAppUUID();  // Wait for AppUUID to be loaded
+    
+    // DEV MODE: Skip pairing, show main screen with mock data
+    if (_devMode) {
+      _initDevMode();
+      return;
+    }
+    
     await _loadStoredDevices();  // Then load stored devices (may connect MQTT)
+  }
+
+  /// Initialize dev mode with mock data for UI testing
+  void _initDevMode() {
+    setState(() {
+      // Mock device
+      _selectedSerial = '12345';
+      _selectedIp = '192.168.1.100';  // Fake IP
+      _storedDevices = [{'serial': '12345', 'ip': '192.168.1.100', 'customName': 'Test Device'}];
+      
+      // Slider settings (the main thing to test)
+      _currentMinA = 6;
+      _currentMaxA = 32;
+      _overrideCurrentA = 16.0;  // Start in middle of range
+      
+      // Mock status data
+      status = 'Connected';
+      _currentMode = 'normal';
+      _loadbl = 0;  // Show slider (loadbl < 2)
+      _stateId = 1;
+      _isConnected = true;
+      _error = 'None';
+      _nrofphases = 3;
+      _chargeCurrentA = 16.0;
+      _iconColor = Colors.green;
+      
+      // Mock meter data
+      _evMeterEnabled = true;
+      _mainsMeterEnabled = true;
+      _powerKW = 11.0;
+      _chargedKWh = 5.2;
+      _l1A = 16.0;
+      _l2A = 16.0;
+      _l3A = 16.0;
+      
+      // Version info
+      _smartEVSEVersion = 'DEV-MODE';
+    });
   }
 
   /// Load app version from package info
@@ -235,7 +283,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
         _l3A = data['l3'];
       }
       if (data.containsKey('power')) {
-        _powerW = data['power'];
+        _powerKW = data['power'];
       }
       if (data.containsKey('charged_kwh')) {
         _chargedKWh = data['charged_kwh'];
@@ -531,8 +579,8 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
             }
             _evMeterEnabled = (data['ev_meter']?['description'] ?? 'Disabled') != 'Disabled';
             _mainsMeterEnabled = (data['settings']?['mains_meter'] ?? 'Disabled') != 'Disabled';
-            _powerW = (data['ev_meter']?['import_active_power'] as num? ?? 0).toDouble();
-            _chargedKWh = (data['ev_meter']?['charged_kwh'] as num? ?? 0).toDouble();  // Corrected field name
+            _powerKW = (data['ev_meter']?['import_active_power'] as num? ?? 0).toDouble() / 1000.0;  // W to kW
+            _chargedKWh = (data['ev_meter']?['charged_wh'] as num? ?? 0).toDouble() / 1000.0;  // Wh to kWh
             _l1A = (data['phase_currents']?['L1'] ?? 0) / 10.0;
             _l2A = (data['phase_currents']?['L2'] ?? 0) / 10.0;
             _l3A = (data['phase_currents']?['L3'] ?? 0) / 10.0;
@@ -589,6 +637,14 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   }
 
   Future<void> _setMode(String mode) async {
+    // DEV MODE: Just update local state, no network calls
+    if (_devMode) {
+      setState(() {
+        _currentMode = mode;
+      });
+      return;
+    }
+
     if (_selectedIp.isEmpty && !_mqttConnected) {
       _showSnackBar('Select a device first!');
       return;
@@ -655,6 +711,14 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   }
 
   Future<void> _setOverride(int deciAmps) async {
+    // DEV MODE: Just update local state, no network calls
+    if (_devMode) {
+      setState(() {
+        _overrideCurrentA = deciAmps / 10.0;
+      });
+      return;
+    }
+
     if (_selectedIp.isEmpty && !_mqttConnected) {
       _showSnackBar('Select a device first!');
       return;
@@ -1215,7 +1279,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                               children: [
                                 Text('${_chargeCurrentA.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
                                 if (_evMeterEnabled)
-                                  Text('${(_powerW).toStringAsFixed(1)} kW', style: const TextStyle(fontSize: 18)),
+                                  Text('${_powerKW.toStringAsFixed(1)} kW', style: const TextStyle(fontSize: 18)),
                                 if (_evMeterEnabled)
                                   Text('${_chargedKWh.toStringAsFixed(1)} kWh', style: const TextStyle(fontSize: 18)),
                               ],
@@ -1329,16 +1393,19 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text('Override Current:', style: TextStyle(fontSize: 16, color: Colors.lightBlue, fontWeight: FontWeight.bold)),
-                        Slider(
-                          value: _overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()),
-                          min: _currentMinA.toDouble(),
-                          max: _currentMaxA.toDouble(),
-                          divisions: _currentMaxA - _currentMinA,
-                          label: '${_overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()).toInt()}A',
-                          onChanged: (value) { setState(() => _overrideCurrentA = value); },  // Added onChanged for real-time update
-                          onChangeEnd: (value) {
-                            _setOverride((value * 10).toInt());
-                          },
+                        SizedBox(
+                          height: 40,
+                          child: Slider(
+                            value: _overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()),
+                            min: _currentMinA.toDouble(),
+                            max: _currentMaxA.toDouble(),
+                            divisions: (_currentMaxA - _currentMinA).clamp(1, 100),
+                            label: '${_overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()).toInt()}A',
+                            onChanged: (value) { setState(() => _overrideCurrentA = value); },
+                            onChangeEnd: (value) {
+                              _setOverride((value * 10).toInt());
+                            },
+                          ),
                         ),
                         Center(
                           child: ElevatedButton(
