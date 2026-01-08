@@ -1378,44 +1378,58 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                     color: boxBackgroundColor,  // Use const color
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Theme(
-                    data: Theme.of(context).copyWith(
-                      sliderTheme: SliderThemeData(
-                        thumbColor: Colors.white,  // White thumb
-                        activeTrackColor: Colors.green,  // White active track
-                        inactiveTrackColor: Colors.grey,  // Grey inactive track
-                        overlayColor: Colors.white.withOpacity(0.2),  // Light overlay
-                        valueIndicatorColor: boxBackgroundColor,  // Use const color for label background
-                        valueIndicatorTextStyle: const TextStyle(color: Colors.white),  // White label text
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Override Current:', style: TextStyle(fontSize: 16, color: Colors.lightBlue, fontWeight: FontWeight.bold)),
-                        SizedBox(
-                          height: 40,
-                          child: Slider(
-                            value: _overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()),
-                            min: _currentMinA.toDouble(),
-                            max: _currentMaxA.toDouble(),
-                            divisions: (_currentMaxA - _currentMinA).clamp(1, 100),
-                            label: '${_overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()).toInt()}A',
-                            onChanged: (value) { setState(() => _overrideCurrentA = value); },
-                            onChangeEnd: (value) {
-                              _setOverride((value * 10).toInt());
-                            },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Override Current:', style: TextStyle(fontSize: 16, color: Colors.lightBlue, fontWeight: FontWeight.bold)),
+                      if (_currentMinA >= _currentMaxA) ...[
+                        // Show message when slider cannot be displayed (invalid range)
+                        const SizedBox(height: 16),
+                        Center(
+                          child: Text(
+                            'Cannot display slider due to invalid range.\nMIN ${_currentMinA}A should be lower than MAX ${_currentMaxA}A',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 14, color: Colors.orange, fontStyle: FontStyle.italic),
                           ),
                         ),
-                        Center(
-                          child: ElevatedButton(
-                            onPressed: () => _setOverride(0),
-                            style: ElevatedButton.styleFrom(foregroundColor: Colors.white),  // Force white text on button
-                            child: const Text('Disable Override'),
+                        const SizedBox(height: 16),
+                      ] else ...[
+                        // Show slider when range is valid (MIN < MAX)
+                        Theme(
+                          data: Theme.of(context).copyWith(
+                            sliderTheme: SliderThemeData(
+                              thumbColor: Colors.white,  // White thumb
+                              activeTrackColor: Colors.green,  // White active track
+                              inactiveTrackColor: Colors.grey,  // Grey inactive track
+                              overlayColor: Colors.white.withOpacity(0.2),  // Light overlay
+                              valueIndicatorColor: boxBackgroundColor,  // Use const color for label background
+                              valueIndicatorTextStyle: const TextStyle(color: Colors.white),  // White label text
+                            ),
+                          ),
+                          child: SizedBox(
+                            height: 40,
+                            child: Slider(
+                              value: _overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()),
+                              min: _currentMinA.toDouble(),
+                              max: _currentMaxA.toDouble(),
+                              divisions: (_currentMaxA - _currentMinA),  // Safe: we know max > min here
+                              label: '${_overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()).toInt()}A',
+                              onChanged: (value) { setState(() => _overrideCurrentA = value); },
+                              onChangeEnd: (value) {
+                                _setOverride((value * 10).toInt());
+                              },
+                            ),
                           ),
                         ),
                       ],
-                    ),
+                      Center(
+                        child: ElevatedButton(
+                          onPressed: () => _setOverride(0),
+                          style: ElevatedButton.styleFrom(foregroundColor: Colors.white),  // Force white text on button
+                          child: const Text('Disable Override'),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
