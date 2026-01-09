@@ -32,7 +32,7 @@ android {
     defaultConfig {
         applicationId = "com.stegen.smartevse"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
