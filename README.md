@@ -1,28 +1,12 @@
-# SmartEVSE v3 app
+# SmartEVSE app
 
-<img width="409" height="886" alt="image" src="https://github.com/user-attachments/assets/bf1d4737-ba30-4017-828f-b3cebde11ec9" />
+<img width="380" height="822" alt="SmartEVSE App Phone" src="https://github.com/user-attachments/assets/fa79b82b-7411-4b7f-9ca0-ac04c590239a" />
 
-Uses Flutter, Android studio, should be portable to iOS
+##
 
-## Getting Started
-
-Install flutter, add %PATH variables. 
-Install Android studio, make sure that the command line tools are installed. (Settings → Android SDK → SDK Tools → Command line tools)
-
-Open a terminal window, then run:
-- `flutter pub get` to install all dependencies.
-- `flutter doctor` shows any potential issues, and ways to fix them.
-- `flutter doctor --android-licenses` to accept android licences.
-- on phone: Settings → About phone → tap “Build number” 7 times → you are now a developer.
-- Back → System → Developer options → enable “USB debugging”.
-- Use `flutter devices` to see connected devices.
-Then run `flutter run` to run debug version on your connnected phone.
-- Build apk for 64 bit android only: `flutter build apk --target-platform android-arm64` (this keeps the .apk relatively small)
-- Install on phone `flutter install`. Note that this command will deinstall, and re-install the app, erasing all stored data.
-- It might be better to use `adb install -r build/app/outputs/flutter-apk/app-release.apk`
-- Note that when re-installing the dev environment, the phone needs to paired again. Re-enable USB debugging on the phone.
-
-Might have missed some steps, let me know and i'll add them.
+<a href="https://play.google.com/store/apps/details?id=com.stegen.smartevse">
+  <img width="239" height="71" alt="GetItOnGooglePlay_Badge_Web_color_English" src="https://github.com/user-attachments/assets/b258cca1-e230-4932-9c3c-43bed13e95e8" url="example.com" />
+</a>
 
 ## Using the App
 
@@ -56,6 +40,25 @@ After installing a unique UUID is generated, which is used as username together 
 This is only required for the mqtt (cloud) connection.
 No privacy-related or personally identifiable data is collected or stored by the app, either locally or remotely. All pairing and device information is kept only on your device for the sake of connecting and controlling your SmartEVSE units.
 
+## Setting up the Flutter development environment
+
+Install flutter, add %PATH variables. 
+Install Android studio, make sure that the command line tools are installed. (Settings → Android SDK → SDK Tools → Command line tools)
+
+Open a terminal window, then run:
+- `flutter pub get` to install all dependencies.
+- `flutter doctor` shows any potential issues, and ways to fix them.
+- `flutter doctor --android-licenses` to accept android licences.
+- on phone: Settings → About phone → tap “Build number” 7 times → you are now a developer.
+- Back → System → Developer options → enable “USB debugging”.
+- Use `flutter devices` to see connected devices.
+Then run `flutter run` to run debug version on your connnected phone.
+- Build apk for 64 bit android only: `flutter build apk --target-platform android-arm64` (this keeps the .apk relatively small)
+- Install on phone `flutter install`. Note that this command will deinstall, and re-install the app, erasing all stored data.
+- It might be better to use `adb install -r build/app/outputs/flutter-apk/app-release.apk`
+- Note that when re-installing the dev environment, the phone needs to paired again. Re-enable USB debugging on the phone.
+
+Might have missed some steps, let me know and i'll add them.
 
 ## Used AI assistants
 
