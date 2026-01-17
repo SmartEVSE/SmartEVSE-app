@@ -1142,6 +1142,57 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
     );
   }
 
+  Widget _buildNoDeviceMessage() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const SizedBox(height: 40),
+        const Icon(Icons.manage_search, size: 80, color: Colors.blue),
+        const SizedBox(height: 24),
+        const Text(
+          'Welcome to SmartEVSE',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'To get started, tap the magnifying glass icon in the top right corner to search for SmartEVSE devices on your local network.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 16),
+        ),
+        const SizedBox(height: 40),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: boxBackgroundColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Connection Tips',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Text('• Make sure this device is connected to the same Wi-Fi network as the SmartEVSE.'),
+              const SizedBox(height: 12),
+              const Text('• Ensure "Local Network" permission is granted in your iOS/Android settings.'),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1186,25 +1237,35 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
         )
             : null,
         title: _storedDevices.isNotEmpty && _selectedSerial != null && _storedDevices.any((d) => d['serial'] == _selectedSerial)
-            ? DropdownButton<String>(
-          value: _selectedSerial,
-          underline: const SizedBox(),  // Remove the underline
-          style: const TextStyle(fontSize: 22),  // Larger text for selected item
-          items: (List.from(_storedDevices)..sort((a, b) => int.parse(a['serial']!) - int.parse(b['serial']!))).map((device) {
-            return DropdownMenuItem<String>(
-              value: device['serial'],
-              child: Text(
-                _getDeviceDisplayName(device),
-                style: const TextStyle(fontSize: 20),  // Larger text for menu items
-              ),
-            );
-          }).toList(),
-          onChanged: (value) {
-            final selectedDevice = _findDeviceBySerial(value);
-            if (selectedDevice != null) {
-              _setActiveEVSE(value!, selectedDevice['ip']!);
-            }
-          },
+            ? DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: _selectedSerial,
+            isExpanded: MediaQuery.of(context).size.width < 375,
+            alignment: MediaQuery.of(context).size.width < 375 ? Alignment.centerLeft : Alignment.center,
+            icon: MediaQuery.of(context).size.width < 375 ? const SizedBox.shrink() : null,
+            iconSize: MediaQuery.of(context).size.width < 375 ? 0.0 : 24.0,
+            style: TextStyle(fontSize: MediaQuery.of(context).size.width < 375 ? 16 : 20),
+            items: (List.from(_storedDevices)..sort((a, b) => int.parse(a['serial']!) - int.parse(b['serial']!))).map((device) {
+              return DropdownMenuItem<String>(
+                value: device['serial'],
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: MediaQuery.of(context).size.width < 375 ? 0.0 : 16.0,
+                  ),
+                  child: Text(
+                    _getDeviceDisplayName(device),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              );
+            }).toList(),
+            onChanged: (value) {
+              final selectedDevice = _findDeviceBySerial(value);
+              if (selectedDevice != null) {
+                _setActiveEVSE(value!, selectedDevice['ip']!);
+              }
+            },
+          ),
         )
             : const Text('SmartEVSE Control'),
         actions: [
@@ -1225,7 +1286,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: _selectedIp.isEmpty
-                    ? const Center(child: Text('No SmartEVSE selected'))
+                    ? _buildNoDeviceMessage()
                     : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1246,14 +1307,17 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                             crossAxisAlignment: CrossAxisAlignment.center,
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('L1: ${_l1A.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
-                                  Text('L2: ${_l2A.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
-                                  Text('L3: ${_l3A.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
-                                ],
-                              ),
+                              Builder(builder: (context) {
+                                final unit = MediaQuery.of(context).size.width < 375 ? '' : ' A';
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('L1: ${_l1A.toStringAsFixed(1)}$unit', style: const TextStyle(fontSize: 18)),
+                                    Text('L2: ${_l2A.toStringAsFixed(1)}$unit', style: const TextStyle(fontSize: 18)),
+                                    Text('L3: ${_l3A.toStringAsFixed(1)}$unit', style: const TextStyle(fontSize: 18)),
+                                  ],
+                                );
+                              }),
                               const Icon(Icons.bolt, size: 32),
                             ],
                           ),
@@ -1536,7 +1600,6 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
     } catch (e) {
       Logger.error('App', 'mDNS discovery error: $e');
     }
-
     // Phase 2: Subnet scan fallback (if mDNS found nothing or as supplement)
     if (mounted && _onlineDevices.isEmpty) {
       setState(() {
@@ -1719,7 +1782,7 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                         child: Text(
                           _isScanning
                               ? 'Searching for devices...'
-                              : 'No devices found.\nMake sure your SmartEVSE is connected to WiFi.',
+                              : 'No devices found. Please check:\n• SmartEVSE is powered on and connected to WiFi\n• Phone is on the same network (not guest WiFi or separate VLAN)',
                           textAlign: TextAlign.center,
                           style: const TextStyle(color: Colors.grey),
                         ),
@@ -1743,17 +1806,15 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                             : 'SmartEVSE-$serial';
 
                         return ListTile(
+                          dense: true,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 0),
                           leading: isStored
                               ? IconButton(
                                   icon: const Icon(Icons.edit, size: 20),
                                   onPressed: () async {
-                                    // Use stored device's serial to ensure match
                                     final storedSerial = storedDevice['serial']!;
                                     await widget.onEditDeviceName(storedSerial);
                                     if (mounted) {
-                                      // Sync local devices with parent by calling onDevicesChanged
-                                      // This ensures both sides have the same data
                                       widget.onDevicesChanged(_localStoredDevices);
                                       setState(() {});
                                     }
@@ -1761,9 +1822,14 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                                 )
                               : const SizedBox(width: 48),
                           title: Text(
-                            '$displayName ($ip)${isOnline ? '' : ' (offline)'}',
+                            displayName,
+                            style: TextStyle(color: isOnline ? null : Colors.grey),
+                          ),
+                          subtitle: Text(
+                            '$ip${isOnline ? '' : ' (offline)'}',
                             style: TextStyle(
-                              color: isOnline ? null : Colors.grey,
+                              fontSize: 12,
+                              color: isOnline ? Colors.grey : Colors.grey[600],
                             ),
                           ),
                           trailing: SizedBox(
