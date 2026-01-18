@@ -1297,17 +1297,14 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                             crossAxisAlignment: CrossAxisAlignment.center,
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Builder(builder: (context) {
-                                final unit = MediaQuery.of(context).size.width < 375 ? '' : ' A';
-                                return Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('L1: ${_l1A.toStringAsFixed(1)}$unit', style: const TextStyle(fontSize: 18)),
-                                    Text('L2: ${_l2A.toStringAsFixed(1)}$unit', style: const TextStyle(fontSize: 18)),
-                                    Text('L3: ${_l3A.toStringAsFixed(1)}$unit', style: const TextStyle(fontSize: 18)),
-                                  ],
-                                );
-                              }),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('L1: ${_l1A.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
+                                  Text('L2: ${_l2A.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
+                                  Text('L3: ${_l3A.toStringAsFixed(1)} A', style: const TextStyle(fontSize: 18)),
+                                ],
+                              ),
                               const Icon(Icons.bolt, size: 32),
                             ],
                           ),
@@ -1566,6 +1563,7 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
   void initState() {
     super.initState();
     _localStoredDevices = List.from(widget.storedDevices);
+    if (_localStoredDevices.isEmpty) _startDiscovery();
   }
 
   Future<void> _startDiscovery() async {
