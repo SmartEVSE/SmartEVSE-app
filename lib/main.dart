@@ -40,7 +40,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SmartEVSE Control',
+      title: '',
       theme: ThemeData(
         brightness: Brightness.dark,  // Enables dark mode: black background, white text
         primarySwatch: Colors.blue,
@@ -1237,37 +1237,27 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
         )
             : null,
         title: _storedDevices.isNotEmpty && _selectedSerial != null && _storedDevices.any((d) => d['serial'] == _selectedSerial)
-            ? DropdownButtonHideUnderline(
-          child: DropdownButton<String>(
-            value: _selectedSerial,
-            isExpanded: MediaQuery.of(context).size.width < 375,
-            alignment: MediaQuery.of(context).size.width < 375 ? Alignment.centerLeft : Alignment.center,
-            icon: MediaQuery.of(context).size.width < 375 ? const SizedBox.shrink() : null,
-            iconSize: MediaQuery.of(context).size.width < 375 ? 0.0 : 24.0,
-            style: TextStyle(fontSize: MediaQuery.of(context).size.width < 375 ? 16 : 20),
-            items: (List.from(_storedDevices)..sort((a, b) => int.parse(a['serial']!) - int.parse(b['serial']!))).map((device) {
-              return DropdownMenuItem<String>(
-                value: device['serial'],
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: MediaQuery.of(context).size.width < 375 ? 0.0 : 16.0,
-                  ),
-                  child: Text(
-                    _getDeviceDisplayName(device),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              );
-            }).toList(),
-            onChanged: (value) {
-              final selectedDevice = _findDeviceBySerial(value);
-              if (selectedDevice != null) {
-                _setActiveEVSE(value!, selectedDevice['ip']!);
-              }
-            },
-          ),
+            ? DropdownButton<String>(
+          value: _selectedSerial,
+          underline: const SizedBox(),  // Remove the underline
+          style: const TextStyle(fontSize: 22),  // Larger text for selected item
+          items: (List.from(_storedDevices)..sort((a, b) => int.parse(a['serial']!) - int.parse(b['serial']!))).map((device) {
+            return DropdownMenuItem<String>(
+              value: device['serial'],
+              child: Text(
+                _getDeviceDisplayName(device),
+                style: const TextStyle(fontSize: 20),  // Larger text for menu items
+              ),
+            );
+          }).toList(),
+          onChanged: (value) {
+            final selectedDevice = _findDeviceBySerial(value);
+            if (selectedDevice != null) {
+              _setActiveEVSE(value!, selectedDevice['ip']!);
+            }
+          },
         )
-            : const Text('SmartEVSE Control'),
+            : null,
         actions: [
           IconButton(
             icon: const Icon(Icons.manage_search),
@@ -1576,7 +1566,6 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
   void initState() {
     super.initState();
     _localStoredDevices = List.from(widget.storedDevices);
-    _startDiscovery();
   }
 
   Future<void> _startDiscovery() async {
