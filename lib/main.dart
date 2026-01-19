@@ -72,6 +72,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
   int _currentMinA = 6;
   int _currentMaxA = 32;
   double _overrideCurrentA = 6.0;  // Set initial to min to avoid slider error
+  bool _isSliderActive = false;  // Prevent server updates while user is dragging slider
   bool isLoading = false;
   Timer? _timer;
   bool _evMeterEnabled = false;
@@ -252,7 +253,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       if (data.containsKey('charge_current')) {
         _chargeCurrentA = data['charge_current'];
       }
-      if (data.containsKey('override_current')) {
+      if (data.containsKey('override_current') && !_isSliderActive) {
         _overrideCurrentA = data['override_current'];
         if (_overrideCurrentA == 0) {
           _overrideCurrentA = _currentMinA.toDouble();
@@ -573,9 +574,11 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
             _loadbl = data['evse']?['loadbl'] ?? 0;
             _currentMinA = data['settings']?['current_min'] ?? 6;
             _currentMaxA = data['settings']?['current_max'] ?? 32;
-            _overrideCurrentA = (data['settings']?['override_current'] ?? 0) / 10;
-            if (_overrideCurrentA == 0) {
-              _overrideCurrentA = _currentMinA.toDouble();  // Default to min if no override
+            if (!_isSliderActive) {
+              _overrideCurrentA = (data['settings']?['override_current'] ?? 0) / 10;
+              if (_overrideCurrentA == 0) {
+                _overrideCurrentA = _currentMinA.toDouble();  // Default to min if no override
+              }
             }
             _evMeterEnabled = (data['ev_meter']?['description'] ?? 'Disabled') != 'Disabled';
             _mainsMeterEnabled = (data['settings']?['mains_meter'] ?? 'Disabled') != 'Disabled';
@@ -1465,8 +1468,10 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                               max: _currentMaxA.toDouble(),
                               divisions: (_currentMaxA - _currentMinA),  // Safe: we know max > min here
                               label: '${_overrideCurrentA.clamp(_currentMinA.toDouble(), _currentMaxA.toDouble()).toInt()}A',
+                              onChangeStart: (_) => _isSliderActive = true,
                               onChanged: (value) { setState(() => _overrideCurrentA = value); },
                               onChangeEnd: (value) {
+                                _isSliderActive = false;
                                 _setOverride((value * 10).toInt());
                               },
                             ),
