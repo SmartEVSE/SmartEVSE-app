@@ -42,6 +42,7 @@ class MqttService {
   String? _token;
   bool _isConnected = false;
   Timer? _reconnectTimer;
+  Timer? _statusTimer;
 
   MqttDataCallback? onDataReceived;
   MqttConnectionCallback? onConnectionChanged;
@@ -142,10 +143,14 @@ class MqttService {
   void disconnect() {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _statusTimer?.cancel();
+    _statusTimer = null;
     // Publish offline status before graceful disconnect
     // (Last Will only triggers on unexpected disconnects)
     if (_isConnected && _client != null && _serial != null) {
       _publish('$_topicPrefix/App/Status', 'offline');
+      // This will stop the SmartEVSE from publishing it's data,
+      // but as each online phone will resend it's /online state this not a problem
     }
     _client?.disconnect();
     _client = null;
@@ -363,18 +368,25 @@ class MqttService {
     Logger.info('MQTT', 'Connected');
     _isConnected = true;
     // Publish online status so controller knows app is connected
+    // repeat every 5 seconds, so disconnecting phones do not disable the messages for other devices
     _publish('$_topicPrefix/App/Status', 'online');
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_isConnected) _publish('$_topicPrefix/App/Status', 'online');
+    });
     onConnectionChanged?.call(true);
   }
 
   void _onDisconnected() {
     Logger.info('MQTT', 'Disconnected');
+    _statusTimer?.cancel();
     _isConnected = false;
     onConnectionChanged?.call(false);
   }
 
   void _onAutoReconnect() {
     Logger.info('MQTT', 'Auto-reconnecting...');
+    _statusTimer?.cancel();
     _isConnected = false;
     onConnectionChanged?.call(false);
   }

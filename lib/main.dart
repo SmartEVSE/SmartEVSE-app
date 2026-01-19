@@ -1554,6 +1554,7 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
   List<Map<String, String>> _localStoredDevices = [];
   List<Map<String, dynamic>> _onlineDevices = [];
   bool _isScanning = false;
+  bool _hasScanned = false;
   String _scanStatus = '';
   int _scanProgress = 0;
   int _scanTotal = 0;
@@ -1625,6 +1626,7 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
       
       setState(() {
         _isScanning = false;
+        _hasScanned = true;
         _scanStatus = _onlineDevices.isEmpty 
             ? 'No devices found' 
             : 'Found ${_onlineDevices.length} device(s)';
@@ -1810,13 +1812,13 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                               : const SizedBox(width: 48),
                           title: Text(
                             displayName,
-                            style: TextStyle(color: isOnline ? null : Colors.grey),
+                            style: TextStyle(color: _hasScanned && !isOnline ? Colors.grey : null),
                           ),
                           subtitle: Text(
-                            '$ip${isOnline ? '' : ' (offline)'}',
+                            _hasScanned && !isOnline ? '$ip (offline)' : ip,
                             style: TextStyle(
                               fontSize: 12,
-                              color: isOnline ? Colors.grey : Colors.grey[600],
+                              color: _hasScanned && !isOnline ? Colors.grey[600] : Colors.grey,
                             ),
                           ),
                           trailing: SizedBox(
@@ -1864,16 +1866,14 @@ class _ManageDevicesDialogState extends State<_ManageDevicesDialog> {
                                       _localStoredDevices.removeWhere((d) => d['serial'] == serial);
                                     });
                                     
-                                    // Update selected device BEFORE onDevicesChanged to avoid dropdown error
-                                    if (widget.selectedSerial == serial) {
-                                      if (_localStoredDevices.isNotEmpty) {
-                                        widget.onDeviceSelected(
-                                          _localStoredDevices.first['serial'],
-                                          _localStoredDevices.first['ip']!,
-                                        );
-                                      } else {
-                                        widget.onDeviceSelected(null, '');
-                                      }
+                                    // Update selection: clear if empty, or select first if we deleted the selected one
+                                    if (_localStoredDevices.isEmpty) {
+                                      widget.onDeviceSelected(null, '');
+                                    } else if (widget.selectedSerial == serial) {
+                                      widget.onDeviceSelected(
+                                        _localStoredDevices.first['serial'],
+                                        _localStoredDevices.first['ip']!,
+                                      );
                                     }
                                     widget.onDevicesChanged(_localStoredDevices);
                                   } else {
