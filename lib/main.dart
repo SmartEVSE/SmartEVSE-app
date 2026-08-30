@@ -658,16 +658,19 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
     if (mode == 'normal') modeValue = 1;
     if (mode == 'off') modeValue = 0;
 
+    final previousMode = _currentMode;
+    // Immediate visual feedback so taps never look ignored (HTTP can take seconds)
+    if (_currentMode != mode) {
+      setState(() => _currentMode = mode);
+    }
+
     // If already using MQTT mode, skip HTTP and go directly to MQTT
     if (_usingMqtt && _mqttConnected) {
       Logger.debug('App', 'setMode: Using MQTT directly (usingMqtt=true)');
       final success = await _mqttService.setMode(modeValue);
       Logger.debug('App', 'setMode: MQTT publish result=$success');
-      if (success) {
-        setState(() {
-          _currentMode = mode;
-        });
-      } else {
+      if (!success) {
+        if (mounted) setState(() => _currentMode = previousMode);
         _showSnackBar('Failed to set mode via MQTT');
       }
       return;
@@ -700,15 +703,12 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       Logger.debug('App', 'setMode: Using MQTT fallback');
       final success = await _mqttService.setMode(modeValue);
       Logger.debug('App', 'setMode: MQTT publish result=$success');
-      if (success) {
-        // Optimistically update local state
-        setState(() {
-          _currentMode = mode;
-        });
-      } else {
+      if (!success) {
+        if (mounted) setState(() => _currentMode = previousMode);
         _showSnackBar('Failed to set mode via MQTT');
       }
     } else if (!httpSuccess && !_mqttConnected) {
+      if (mounted) setState(() => _currentMode = previousMode);
       _showSnackBar('Connection unavailable—check network');
     }
   }
@@ -1142,6 +1142,50 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
       backgroundColor: _currentMode == mode ? Colors.green : null,
       foregroundColor: Colors.white,  // Force button text to white
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      // Allow shrinking below Material's 64dp min so large fonts don't overflow
+      minimumSize: const Size(0, 48),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildModeSelector() {
+    const modes = [
+      ['off', 'Off'],
+      ['normal', 'Normal'],
+      ['solar', 'Solar'],
+      ['smart', 'Smart'],
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(1.0);
+        // 4-across overflows on large font/display size (e.g. Samsung accessibility)
+        // and overflowed buttons do not receive taps.
+        final columns = (constraints.maxWidth / 4 < 72 * textScale) ? 2 : 4;
+        const spacing = 8.0;
+        final buttonWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final m in modes)
+              SizedBox(
+                width: buttonWidth,
+                child: ElevatedButton(
+                  onPressed: () => _setMode(m[0]),
+                  style: _buttonStyle(m[0]),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(m[1], maxLines: 1),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -1388,39 +1432,7 @@ class EVSEControlScreenState extends State<EVSEControlScreen> with WidgetsBindin
                   children: [
                     const Text('Mode', style: TextStyle(fontSize: 16, color: Colors.lightBlue, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        Flexible(
-                          child: ElevatedButton(
-                            onPressed: () => _setMode('off'),
-                            style: _buttonStyle('off'),
-                            child: const Text('Off'),
-                          ),
-                        ),
-                        Flexible(
-                          child: ElevatedButton(
-                            onPressed: () => _setMode('normal'),
-                            style: _buttonStyle('normal'),
-                            child: const Text('Normal'),
-                          ),
-                        ),
-                        Flexible(
-                          child: ElevatedButton(
-                            onPressed: () => _setMode('solar'),
-                            style: _buttonStyle('solar'),
-                            child: const Text('Solar'),
-                          ),
-                        ),
-                        Flexible(
-                          child: ElevatedButton(
-                            onPressed: () => _setMode('smart'),
-                            style: _buttonStyle('smart'),
-                            child: const Text('Smart'),
-                          ),
-                        ),
-                      ],
-                    ),
+                    _buildModeSelector(),
                   ],
                 ),
               ),
